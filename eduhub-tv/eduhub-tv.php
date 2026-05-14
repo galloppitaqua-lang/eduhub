@@ -130,46 +130,20 @@ function ehtv_migrate_tables(): void {
     global $wpdb;
     $charset = $wpdb->get_charset_collate();
 
-    $cols = $wpdb->get_col("DESCRIBE ehtm_tv_playlist", 0);
+    // Suprimir erros de DB durante toda a migração — evita output no HTML
+    $prev_suppress = $wpdb->suppress_errors( true );
+
+    // ── ehtm_tv_playlist: colunas novas
+    $cols = $wpdb->get_col("DESCRIBE ehtm_tv_playlist", 0) ?: [];
+
     if ( ! in_array('tema', $cols) ) {
         $wpdb->query("ALTER TABLE ehtm_tv_playlist ADD COLUMN `tema` VARCHAR(255) NULL AFTER `description`");
     }
     if ( ! in_array('classification', $cols) ) {
         $wpdb->query("ALTER TABLE ehtm_tv_playlist ADD COLUMN `classification` VARCHAR(30) NOT NULL DEFAULT 'conteudo' AFTER `tema`");
     }
-    // Coluna legada — mantida para compat, mas scheduling agora usa ehtm_tv_schedule
-    if ( in_array('scheduled_time', $cols) ) {
-        // Migrar entradas legadas para a nova tabela (apenas se não existirem ainda)
-        if ( $wpdb->get_var("SHOW TABLES LIKE 'ehtm_tv_schedule'") ) {
-            $legacy = $wpdb->get_results(
-                "SELECT id, scheduled_time FROM ehtm_tv_playlist WHERE scheduled_time IS NOT NULL AND active=1"
-            );
-            $today = ehtv_today();
-            foreach ($legacy as $row) {
-                // Criar entrada recorrente para os próximos 30 dias, se ainda não existe
-                for ($d = 0; $d < 30; $d++) {
-                    $dt = new DateTime($today, ehtv_tz());
-                    $dt->modify("+{$d} day");
-                    $date = $dt->format('Y-m-d');
-                    $existing = $wpdb->get_var($wpdb->prepare(
-                        "SELECT id FROM ehtm_tv_schedule WHERE playlist_id=%d AND schedule_date=%s",
-                        $row->id, $date
-                    ));
-                    if ( ! $existing ) {
-                        $wpdb->insert('ehtm_tv_schedule', [
-                            'playlist_id'   => $row->id,
-                            'schedule_date' => $date,
-                            'start_time'    => $row->scheduled_time,
-                            'active'        => 1,
-                            'created_by'    => 0,
-                        ]);
-                    }
-                }
-        	}
-        }
-        $wpdb->query("ALTER TABLE ehtm_tv_playlist DROP COLUMN `scheduled_time`");
-    }
 
+    // ── ehtm_tv_schedule: criar se não existir
     if ( ! $wpdb->get_var("SHOW TABLES LIKE 'ehtm_tv_schedule'") ) {
         $wpdb->query("CREATE TABLE IF NOT EXISTS `ehtm_tv_schedule` (
             `id`            INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -186,6 +160,31 @@ function ehtv_migrate_tables(): void {
         ) {$charset}");
     }
 
+    // ── Migrar coluna legada scheduled_time → ehtm_tv_schedule
+    // (apenas após garantir que a tabela de destino existe)
+    if ( in_array('scheduled_time', $cols) ) {
+        $legacy = $wpdb->get_results(
+            "SELECT id, scheduled_time FROM ehtm_tv_playlist WHERE scheduled_time IS NOT NULL AND active=1"
+        ) ?: [];
+        $today = ehtv_today();
+        foreach ($legacy as $row) {
+            if ( empty($row->scheduled_time) ) continue;
+            // 30 dias à frente; INSERT IGNORE para não falhar em duplicata
+            for ($d = 0; $d < 30; $d++) {
+                $dt = new DateTime($today, ehtv_tz());
+                $dt->modify("+{$d} day");
+                $wpdb->query( $wpdb->prepare(
+                    "INSERT IGNORE INTO ehtm_tv_schedule
+                     (playlist_id, schedule_date, start_time, active, created_by)
+                     VALUES (%d, %s, %s, 1, 0)",
+                    $row->id, $dt->format('Y-m-d'), $row->scheduled_time
+                ));
+            }
+        }
+        $wpdb->query("ALTER TABLE ehtm_tv_playlist DROP COLUMN `scheduled_time`");
+    }
+
+    // ── ehtm_tv_views: criar se não existir, ou adicionar índice faltante
     if ( ! $wpdb->get_var("SHOW TABLES LIKE 'ehtm_tv_views'") ) {
         $wpdb->query("CREATE TABLE IF NOT EXISTS `ehtm_tv_views` (
             `id`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -201,18 +200,25 @@ function ehtv_migrate_tables(): void {
             KEY `idx_started`   (`started_at`)
         ) {$charset}");
     } else {
-        $vcols = $wpdb->get_col("DESCRIBE ehtm_tv_views", 0);
-        if ( ! in_array('idx_started', $vcols) ) {
+        // Usar SHOW INDEX (não DESCRIBE) para verificar índice
+        if ( ! $wpdb->get_var("SHOW INDEX FROM ehtm_tv_views WHERE Key_name = 'idx_started'") ) {
             $wpdb->query("ALTER TABLE ehtm_tv_views ADD KEY `idx_started` (`started_at`)");
         }
     }
+
+    $wpdb->suppress_errors( $prev_suppress );
 }
 
 // ── Shortcode ─────────────────────────────────────────────────
 function ehtv_shortcode_player( $atts ): string {
+    global $wpdb;
+    // Garantir que erros de DB não apareçam dentro do player
+    $prev = $wpdb->suppress_errors( true );
     ob_start();
     include EHTV_PATH . 'player.php';
-    return ob_get_clean();
+    $html = ob_get_clean();
+    $wpdb->suppress_errors( $prev );
+    return $html;
 }
 
 // ── Helpers: playlist, url, thumb ────────────────────────────
@@ -257,9 +263,20 @@ function ehtv_classification_label( string $c ): string {
  * Retorna entradas agendadas para a data informada, com dados da playlist.
  * Horários no fuso América/São_Paulo.
  */
+function ehtv_schedule_table_exists(): bool {
+    static $exists = null;
+    if ( $exists === null ) {
+        global $wpdb;
+        $exists = (bool) $wpdb->get_var("SHOW TABLES LIKE 'ehtm_tv_schedule'");
+    }
+    return $exists;
+}
+
 function ehtv_get_schedule_for_date( string $date ): array {
     global $wpdb;
-    return $wpdb->get_results( $wpdb->prepare(
+    if ( ! ehtv_schedule_table_exists() ) return [];
+    $prev = $wpdb->suppress_errors( true );
+    $rows = $wpdb->get_results( $wpdb->prepare(
         "SELECT s.*, p.title, p.description, p.tema, p.classification, p.type,
                 p.youtube_id, p.external_url, p.material_id, p.thumbnail, p.duration
          FROM ehtm_tv_schedule s
@@ -268,6 +285,8 @@ function ehtv_get_schedule_for_date( string $date ): array {
          ORDER BY s.start_time ASC",
         $date
     ) ) ?: [];
+    $wpdb->suppress_errors( $prev );
+    return $rows;
 }
 
 // ── Grade do dia ──────────────────────────────────────────────
