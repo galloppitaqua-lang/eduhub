@@ -279,16 +279,6 @@ foreach ($sched_entries as $entry) {
 }
 </style>
 
-<!-- YouTube IFrame API — carregamento único por página -->
-<script>
-if (!window._ehtvYTLoaded) {
-    window._ehtvYTLoaded = true;
-    var _s = document.createElement('script');
-    _s.src = 'https://www.youtube.com/iframe_api';
-    document.head.appendChild(_s);
-}
-</script>
-
 <div class="ehtv-wrap">
 
 <?php if (empty($playlist)) : ?>
@@ -389,7 +379,7 @@ var ytPlayer     = null;
 var ytReady      = false;
 var ytPendingIdx = -1;
 
-function onYouTubeIframeAPIReady() {
+function ehtvInitYTPlayer() {
     if (ytReady) return;
     ytReady = true;
     ytPlayer = new YT.Player('ehtv-yt-player', {
@@ -399,7 +389,7 @@ function onYouTubeIframeAPIReady() {
             controls:       1,
             rel:            0,
             modestbranding: 1,
-            playsinline:    1,    // essencial para iOS / Android
+            playsinline:    1,
             fs:             1,
             enablejsapi:    1,
             origin:         window.location.origin,
@@ -420,12 +410,30 @@ function onYouTubeIframeAPIReady() {
                 if (e.data === YT.PlayerState.BUFFERING) ehtv.onPlay();
             },
             onError: function() {
-                // Fallback para mobile: avança para o próximo após 3s
                 setTimeout(function() { ehtv.next(); }, 3000);
             }
         }
     });
 }
+
+// Encadeia o callback — não sobrescreve outros plugins que também usam a API
+(function() {
+    var _prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = function() {
+        if (typeof _prev === 'function') _prev();
+        ehtvInitYTPlayer();
+    };
+    if (window.YT && window.YT.Player) {
+        // API já estava carregada por outro script — inicializa agora
+        ehtvInitYTPlayer();
+    } else if (!window._ehtvYTLoaded) {
+        window._ehtvYTLoaded = true;
+        var _s = document.createElement('script');
+        _s.src = 'https://www.youtube.com/iframe_api';
+        document.head.appendChild(_s);
+    }
+    // Se _ehtvYTLoaded=true mas YT ainda não pronto: a cadeia acima chamará ehtvInitYTPlayer
+})();
 
 // ── Analytics ─────────────────────────────────────────────────
 var ehtvSession = (function() {
@@ -788,5 +796,9 @@ var ehtv = {
     },
 };
 
-document.addEventListener('DOMContentLoaded', function() { ehtv.init(); });
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() { ehtv.init(); });
+} else {
+    ehtv.init();
+}
 </script>
