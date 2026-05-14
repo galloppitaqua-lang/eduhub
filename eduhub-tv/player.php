@@ -2,12 +2,6 @@
 /* player.php — TV Escolar pública v2.1 */
 if ( ! defined('ABSPATH') ) exit;
 
-// Garante string UTF-8 válida — evita json_encode retornar false com dados latin1
-function ehtv_utf8( $v ): string {
-    $s = (string)( $v ?? '' );
-    return mb_check_encoding( $s, 'UTF-8' ) ? $s : mb_convert_encoding( $s, 'UTF-8', 'ISO-8859-1' );
-}
-
 $playlist = ehtv_get_playlist();
 
 // Montar dados JS da playlist
@@ -49,6 +43,15 @@ foreach ($sched_entries as $entry) {
         'triggered'   => false,
     ];
 }
+
+// Serializa o payload como base64 — imune a filtros de conteúdo do WordPress
+// (wptexturize, plugins de segurança, etc.) que convertem aspas no bloco <script>
+$ehtv_b64 = base64_encode( wp_json_encode([
+    'items'    => $items_js,
+    'schedule' => $schedule_js,
+    'ajax'     => admin_url('admin-ajax.php'),
+    'site'     => home_url(),
+]) ?: '{"items":[],"schedule":[],"ajax":"","site":""}' );
 ?>
 
 <style>
@@ -285,7 +288,7 @@ foreach ($sched_entries as $entry) {
 }
 </style>
 
-<div class="ehtv-wrap">
+<div class="ehtv-wrap" id="ehtv-wrap" data-ehtv="<?= esc_attr($ehtv_b64) ?>">
 
 <?php if (empty($playlist)) : ?>
 <div class="ehtv-empty">
@@ -375,10 +378,19 @@ foreach ($sched_entries as $entry) {
 </div><!-- .ehtv-wrap -->
 
 <script>
-var EHTV_ITEMS    = <?= wp_json_encode($items_js)    ?: '[]' ?>;
-var EHTV_SITE     = <?= wp_json_encode(home_url())   ?: '""' ?>;
-var EHTV_AJAX     = <?= wp_json_encode(admin_url('admin-ajax.php')) ?: '""' ?>;
-var EHTV_SCHEDULE = <?= wp_json_encode($schedule_js) ?: '[]' ?>;
+// Lê payload do atributo data-ehtv (base64) — evita que filtros do WordPress
+// corrompam aspas dentro do bloco <script> e causem SyntaxError
+var EHTV_ITEMS = [], EHTV_SCHEDULE = [], EHTV_AJAX = '', EHTV_SITE = '';
+(function() {
+    try {
+        var el = document.getElementById('ehtv-wrap');
+        var d  = JSON.parse(atob(el ? el.getAttribute('data-ehtv') : ''));
+        EHTV_ITEMS    = d.items    || [];
+        EHTV_SCHEDULE = d.schedule || [];
+        EHTV_AJAX     = d.ajax     || '';
+        EHTV_SITE     = d.site     || '';
+    } catch(e) { console.error('[EduHub TV] payload parse error', e); }
+})();
 
 // ── YouTube IFrame API ────────────────────────────────────────
 var ytPlayer     = null;

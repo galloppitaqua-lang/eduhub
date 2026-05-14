@@ -222,6 +222,13 @@ function ehtv_shortcode_player( $atts ): string {
 }
 
 // ── Helpers: playlist, url, thumb ────────────────────────────
+
+/** Garante string UTF-8 válida — evita json_encode retornar false com dados latin1 */
+function ehtv_utf8( $v ): string {
+    $s = (string)( $v ?? '' );
+    return mb_check_encoding( $s, 'UTF-8' ) ? $s : mb_convert_encoding( $s, 'UTF-8', 'ISO-8859-1' );
+}
+
 function ehtv_get_playlist(): array {
     global $wpdb;
     return $wpdb->get_results(
