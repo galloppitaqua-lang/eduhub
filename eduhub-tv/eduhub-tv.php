@@ -201,8 +201,10 @@ function ehtv_migrate_tables(): void {
             KEY `idx_started`   (`started_at`)
         ) {$charset}");
     } else {
-        $vcols = $wpdb->get_col("DESCRIBE ehtm_tv_views", 0);
-        if ( ! in_array('idx_started', $vcols) ) {
+        $idx_exists = $wpdb->get_var(
+            "SHOW INDEX FROM ehtm_tv_views WHERE Key_name = 'idx_started'"
+        );
+        if ( ! $idx_exists ) {
             $wpdb->query("ALTER TABLE ehtm_tv_views ADD KEY `idx_started` (`started_at`)");
         }
     }
