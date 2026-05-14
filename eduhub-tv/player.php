@@ -2,6 +2,12 @@
 /* player.php — TV Escolar pública v2.1 */
 if ( ! defined('ABSPATH') ) exit;
 
+// Garante string UTF-8 válida — evita json_encode retornar false com dados latin1
+function ehtv_utf8( $v ): string {
+    $s = (string)( $v ?? '' );
+    return mb_check_encoding( $s, 'UTF-8' ) ? $s : mb_convert_encoding( $s, 'UTF-8', 'ISO-8859-1' );
+}
+
 $playlist = ehtv_get_playlist();
 
 // Montar dados JS da playlist
@@ -9,15 +15,15 @@ $items_js = [];
 foreach ($playlist as $item) {
     $items_js[] = [
         'id'             => (int)$item->id,
-        'type'           => $item->type,
-        'title'          => $item->title,
-        'description'    => $item->description ?? '',
-        'tema'           => $item->tema ?? '',
-        'classification' => $item->classification ?? 'conteudo',
-        'thumb'          => ehtv_thumb($item),
-        'youtube_id'     => $item->youtube_id ?? '',
+        'type'           => ehtv_utf8($item->type),
+        'title'          => ehtv_utf8($item->title),
+        'description'    => ehtv_utf8($item->description),
+        'tema'           => ehtv_utf8($item->tema),
+        'classification' => ehtv_utf8($item->classification ?: 'conteudo'),
+        'thumb'          => ehtv_utf8(ehtv_thumb($item)),
+        'youtube_id'     => ehtv_utf8($item->youtube_id),
         'file_url'       => $item->type === 'material' ? ehtv_video_url($item) : '',
-        'ext_url'        => $item->type === 'url' ? ($item->external_url ?? '') : '',
+        'ext_url'        => $item->type === 'url' ? ehtv_utf8($item->external_url) : '',
         'duration'       => (int)($item->duration ?? 0),
     ];
 }
@@ -38,7 +44,7 @@ foreach ($sched_entries as $entry) {
         'playlist_id' => (int)$entry->playlist_id,
         'timestamp'   => $ts,
         'time_str'    => substr($entry->start_time, 0, 5),
-        'title'       => $entry->title,
+        'title'       => ehtv_utf8($entry->title),
         'item_idx'    => $idx,
         'triggered'   => false,
     ];
@@ -369,10 +375,10 @@ foreach ($sched_entries as $entry) {
 </div><!-- .ehtv-wrap -->
 
 <script>
-var EHTV_ITEMS    = <?= wp_json_encode($items_js) ?>;
-var EHTV_SITE     = <?= wp_json_encode(home_url()) ?>;
-var EHTV_AJAX     = <?= wp_json_encode(admin_url('admin-ajax.php')) ?>;
-var EHTV_SCHEDULE = <?= wp_json_encode($schedule_js) ?>;
+var EHTV_ITEMS    = <?= wp_json_encode($items_js)    ?: '[]' ?>;
+var EHTV_SITE     = <?= wp_json_encode(home_url())   ?: '""' ?>;
+var EHTV_AJAX     = <?= wp_json_encode(admin_url('admin-ajax.php')) ?: '""' ?>;
+var EHTV_SCHEDULE = <?= wp_json_encode($schedule_js) ?: '[]' ?>;
 
 // ── YouTube IFrame API ────────────────────────────────────────
 var ytPlayer     = null;
